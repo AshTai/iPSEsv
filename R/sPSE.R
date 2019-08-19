@@ -219,7 +219,7 @@ iPSEsv <- function(data,exposure,base.conf,time.conf,mediators,DAGs,suv.model="A
                  function(x)Z[x,]*getFunction(paste("mu_M_",x,sep=""),where = my.new.env)(E.status[(2^(x-1)+1):(2^x)],x,parH))
 
     lambda <- beta_Y*E.status[1] + sum(R*beta_C)*E.status[1] +
-      sum(( c(0,alpha_Y) + alpha_C%*%R )*C_hat) + sum(Zmu)
+      sum(( c(0,alpha_Y) + t(alpha_C)%*%R )*C_hat) + sum(Zmu)
     return(lambda)
   }
 
