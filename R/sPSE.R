@@ -1,0 +1,266 @@
+#' General approach of causal mediation analysis for survival outcome under sequential mediators.
+#'
+#' The main function of iPSEsv.
+#'
+#' @name iPSEsv
+#' @author An-Shun Tai \email{daansh13@gmail.com}, Pei-Hsuan Lin \email{a52012232@gmail.com}, and Sheng-Hsuan Lin \email{shenglin@nctu.edu.tw}
+#' @param data A data frame, where the column is the variable and row is the sample.
+#' @param exposure The name of exposure.
+#' @param base.conf The names of baseline confounders.
+#' @param time.conf The names of time-varying confounders.
+#' @param mediators The name of mediators.
+#' @param DAGs The ordered variable names in the DAG.
+#' @param suv.model The survival model "Aalen" and "Cox". Default is "Aalen".
+#' @return A list of iPSEsv and partPSEsv
+#' @export
+#' @examples
+#' data <- data.frame(time=c(4,3,1,1,2,2,3,3,5,10,2,5,1,7),
+#' status=c(1,1,1,0,1,1,0,1,1,1,0,1,1,0),
+#' x1=rnorm(14,0,1),
+#' x2=rnorm(14,0,1),
+#' x3=rnorm(14,0,1),
+#' c1=rnorm(14,0,1),
+#' c2=rnorm(14,0,1),
+#' c3=rnorm(14,0,1),
+#' sex=c(0,0,1,0,1,1,1,1,1,0,0,0,0,1),
+#' age=c(10,4,2,19,22,31,18,21,41,22,31,29,11,32),
+#' E=sample(c(0,1),size = 14,replace = T))
+#'
+#' base.conf <- c("sex","age")
+#' time.conf <- c("c1","c2","c3")
+#' mediators <- c("x1","x2","x3")
+#' DAGs <- c("c1","x1","c2","x2","c3","x3")
+#' exposure <- "E"
+#'
+#' output <- iPSEsv(data=data,exposure=exposure,base.conf=base.conf,time.conf=time.conf,
+#'                 mediators=mediators,DAGs=DAGs,suv.model="Aalen")
+iPSEsv <- function(data,exposure,base.conf,time.conf,mediators,DAGs,suv.model="Aalen",
+                 med.model="null",time.conf.model="null",a1=1,a0=0){
+  require(timereg)
+  require(survival)
+
+  if(length(med.model)!=length(mediators) & med.model!="null"){stop("med")}
+  if(length(time.conf.model)!=length(time.conf) & time.conf.model!="null"){stop("time")}
+  if(suv.model%in%c("Aalen","Cox")==F){stop("Suv")}
+  if(sum(c("time","status")%in%colnames(data))!=2){stop("time")}
+
+  ########################
+  # create the matrix of the exposure status
+  Ematrix <- t(apply(as.matrix(1:2^length(mediators)),1,function(x)c(rep(a1,x),
+                                                                   rep(a0,2^length(mediators)-x))))
+  Ematrix <- rbind(0,Ematrix)
+
+  ########################
+  # fit model of outcome
+  alpha_Y <- matrix(NA,1,length(base.conf))
+  beta_Y <- matrix(NA,1,1)
+  gamma_Y <- matrix(NA,1,length(time.conf))
+  delta_Y <- matrix(NA,1,length(mediators))
+
+  variables <- c(base.conf,exposure,time.conf,mediators)
+  if(suv.model=="Aalen"){
+    f <- as.formula( paste("Surv(time,status)",
+                           paste("const(",paste(variables, collapse = ") + const("),")",sep=""),
+                           sep = " ~ ") )
+    fit.y <- aalen(f,data=data)$gamma;
+    rownames(fit.y) <- sub(pattern="const[(]",replacement = "",x=rownames(fit.y))
+    rownames(fit.y) <- sub(pattern="[)]",replacement = "",x=rownames(fit.y))
+    alpha_Y[1,] <- fit.y[rownames(fit.y)%in%c(base.conf),]
+    beta_Y[1,] <- fit.y[rownames(fit.y)%in%c(exposure),]
+    gamma_Y[1,] <- fit.y[rownames(fit.y)%in%c(time.conf),]
+    delta_Y[1,] <- fit.y[rownames(fit.y)%in%c(mediators),]
+  }
+
+  if(suv.model=="Cox"){
+    f <- as.formula( paste("Surv(time,status)",
+                          paste(variables, collapse = " + "), sep = " ~ ") )
+    fit.y <- coxph(f,data=data)$coef;
+    alpha_Y[1,] <- fit.y[names(fit.y)%in%c(base.conf)]
+    beta_Y[1,] <- fit.y[names(fit.y)%in%c(exposure)]
+    gamma_Y[1,] <- fit.y[names(fit.y)%in%c(time.conf)]
+    delta_Y[1,] <- fit.y[names(fit.y)%in%c(mediators)]
+  }
+  ########################
+  # fit model of mediators
+  alpha_M <- matrix(NA,length(mediators),1+length(base.conf))
+  beta_M <- matrix(NA,length(mediators),1)
+  gamma_M <- matrix(NA,length(mediators),length(time.conf))
+  delta_M <- matrix(NA,length(mediators),length(mediators)-1)
+  sigma2_M <- matrix(NA,length(mediators),1)
+
+  if( med.model=="null"){
+    med.model <- rep("gaussian",length(mediators));
+    warning("Gaussian model is used for fitting mediators")}
+  for(i in 1:length(mediators)){
+    variables <- c(base.conf,exposure,time.conf[1:i],mediators[0:(i-1)])
+    f <- as.formula( paste(mediators[i], paste(variables, collapse = " + "),sep = " ~ ") )
+    f.m <- glm(f,family  = med.model[i],data=data)
+    fit.m <- f.m$coef
+    alpha_M[i,] <- fit.m[names(fit.m)%in%c("(Intercept)",base.conf)]
+    beta_M[i,] <- fit.m[names(fit.m)%in%c(exposure)]
+    gamma_M[i,1:i] <- fit.m[names(fit.m)%in%c(time.conf[1:i])]
+    delta_M[i,(1:i)-1] <- fit.m[names(fit.m)%in%c(mediators[0:(i-1)])]
+    sigma2_M[i,1] <- sum(f.m$res^2)/f.m$df.res
+  }
+  ########################
+  # fir model of time-varying confounders
+  alpha_C <- matrix(NA,length(time.conf),1+length(base.conf))
+  beta_C <- matrix(NA,length(time.conf),1)
+  gamma_C <- matrix(NA,length(time.conf),length(time.conf)-1)
+  delta_C <- matrix(NA,length(time.conf),length(mediators)-1)
+  sigma2_C <- matrix(NA,length(time.conf),1)
+
+  if( time.conf.model=="null"){
+    time.conf.model <- rep("gaussian",length(time.conf));
+    warning("Gaussian model is used for fitting confounders")}
+  for(i in 1:length(time.conf)){
+    variables <- c(base.conf,exposure,time.conf[0:(i-1)],mediators[0:(i-1)])
+    f <- as.formula( paste(time.conf[i], paste(variables, collapse = " + "),sep = " ~ ") )
+    f.c <- glm(f,family  = med.model[i],data=data)
+    fit.c <- f.c$coef
+    alpha_C[i,] <- fit.c[names(fit.c)%in%c("(Intercept)",base.conf)]
+    beta_C[i,] <- fit.c[names(fit.c)%in%c(exposure)]
+    gamma_C[i,(1:i)-1] <- fit.c[names(fit.c)%in%c(time.conf[0:(i-1)])]
+    delta_C[i,(1:i)-1] <- fit.c[names(fit.c)%in%c(mediators[0:(i-1)])]
+    sigma2_C[i,1] <- sum(f.c$res^2)/f.c$df.res
+  }
+
+  ########################
+  #
+  C_hat <- c(1,colMeans(data[,base.conf]))
+
+  parH <- c()
+  parH$alpha_M <- alpha_M; parH$alpha_C <- alpha_C
+  parH$C_hat <- C_hat
+  parH$beta_M <- beta_M; parH$beta_C <- beta_C
+  parH$gamma_M <- gamma_M; parH$gamma_C <- gamma_C
+  parH$delta_M <- delta_M; parH$delta_C <- delta_C
+
+  ############ a section of generating function
+  NK <- length(mediators)
+
+  my.new.env <- new.env()
+  assign("mu_M_1",function(A,i,parH) {parH$alpha_M[1,]%*%parH$C_hat+parH$beta_M[1,1]*A[1]+
+      parH$gamma_M[1,1]*(parH$alpha_C[1,]%*%parH$C_hat+parH$beta_C[1,1]*A[1])},my.new.env)
+  assign("mu_C_1",function(A,i,parH) {parH$alpha_C[1,]%*%parH$C_hat+parH$beta_C[1,1]*A[1]},my.new.env)
+  for(p in 2:NK){
+    assign(paste("mu_M_",p,sep=""),function(A,i,parH){
+      s1 <- 0
+      for(h in 1:i){
+        s1 <- parH$gamma_M[i,h]*getFunction(paste("mu_C_",h,sep=""),where = my.new.env)(A[1:2^(h-1)],i=h,parH) +s1
+      }
+
+      s2 <- 0
+      for(h in 1:(i-1)){
+        s2 <- parH$delta_M[i,h]*getFunction(paste("mu_M_",h,sep=""),where = my.new.env)(A[(2^(h-1)+1):2^h],i=h,parH) +s2
+      }
+      s <- parH$alpha_M[i,]%*%parH$C_hat+parH$beta_M[i,1]*A[1] + s1+s2
+      return(s)
+    },my.new.env)
+  }# for M
+
+  for(p in 2:NK){
+    assign(paste("mu_C_",p,sep=""),function(A,i,parH){
+      s1 <- 0
+      for(h in 1:(i-1)){
+        s1 <- parH$gamma_C[i,h]*getFunction(paste("mu_C_",h,sep=""),where = my.new.env)(A[1:2^(h-1)],i=h,parH) +s1
+      }
+
+      s2 <- 0
+      for(h in 1:(i-1)){
+        s2 <- parH$delta_M[i,h]*getFunction(paste("mu_M_",h,sep=""),where = my.new.env)(A[(2^(h-1)+1):2^h],i=h,parH) +s2
+      }
+      s <- parH$alpha_C[i,]%*%parH$C_hat+parH$beta_C[i,1]*A[1] + s1+s2
+      return(s)
+    },my.new.env)
+  }#for C
+
+  ############ END: a section of generating function
+
+  lambda_funtion <- function(E.status){
+    #tau2_M_1 <- function(A,i) {sigma2_M[1,1]+gamma_M[1,1]^2*sigma2_C[1,1]}
+    #Because the term of variance is absent in the calculation of causal effect, we ignore it here.
+
+    R <- matrix(NA,length(mediators),1)
+    R[length(mediators),1] <- gamma_Y[1,length(mediators)]
+    for(j in (length(mediators)-1) : 1 ){
+      dd <- (j+1):length(mediators)
+      R[j,1] <- gamma_Y[1,j]+sum(R[dd,1]*gamma_C[dd,j])
+    }
+
+    # a temporary version
+    K <- length(mediators); Z <- matrix(NA,K,1)
+    if(K==1){
+      Z[K,1] <- delta_Y[1,K]
+    }
+    if(K==2){
+      Z[K,1] <- delta_Y[1,K]
+      Z[K-1,1] <- delta_Y[1,K-1]+gamma_Y[1,K]*delta_C[K,K-1]
+    }
+    if(K==3){
+      Z[K,1] <- delta_Y[1,K]
+      Z[K-1,1] <- delta_Y[1,K-1]+gamma_Y[1,K]*delta_C[K,K-1]
+      Z[K-2,1] <- delta_Y[1,K-2]+gamma_Y[1,K]*delta_C[K,K-2]+
+        gamma_Y[1,K]*gamma_C[K,K-1]*delta_C[K-1,K-2]+gamma_Y[1,K-1]*delta_C[K-1,K-2]
+    }
+    if(K==4){
+      Z[K,1] <- delta_Y[1,K]
+      Z[K-1,1] <- delta_Y[1,K-1]+gamma_Y[1,K]*delta_C[K,K-1]
+      Z[K-2,1] <- delta_Y[1,K-2]+gamma_Y[1,K]*delta_C[K,K-2]+
+        gamma_Y[1,K]*gamma_C[K,K-1]*delta_C[K-1,K-2]+gamma_Y[1,K-1]*delta_C[K-1,K-2]
+      Z[K-3,1] <- delta_Y[1,K-3]+gamma_Y[1,K]*delta_C[K,K-3]+
+        gamma_Y[1,K]*gamma_C[K,K-1]*delta_C[K-1,K-3]+gamma_Y[1,K]*gamma_C[K,K-2]*delta_C[K-2,K-3]+
+        gamma_Y[1,K]*gamma_C[K,K-1]*gamma_C[K-1,K-2]*delta_C[K-2,K-3]+
+        gamma_Y[1,K-1]*delta_C[K-1,K-3]+gamma_Y[1,K-1]*gamma_C[K-1,K-2]*delta_C[K-2,K-3]+
+        gamma_Y[1,K-2]*delta_C[K-2,K-3]
+    }
+
+    Zmu <- apply(matrix(1:K),1,
+                 function(x)Z[x,]*getFunction(paste("mu_M_",x,sep=""),where = my.new.env)(E.status[(2^(x-1)+1):(2^x)],x,parH))
+
+    lambda <- beta_Y*E.status[1] + sum(R*beta_C)*E.status[1] +
+      sum(( c(0,alpha_Y) + alpha_C%*%R )*C_hat) + sum(Zmu)
+    return(lambda)
+  }
+
+  iPSEsv <- as.matrix(apply(matrix(1:2^length(mediators)),1,
+                function(i)lambda_funtion(Ematrix[i+1,])-lambda_funtion(Ematrix[i,])))
+
+  convert_to_binary <- function(n) {
+    bin <- ''
+    if(n > 1) {
+      bin <- convert_to_binary(as.integer(n/2))
+    }
+    bin <- paste0(bin, n %% 2)
+    return(as.character(bin))
+  }
+  NN <- c(); NN[1] <- "A->Y"
+  for(u in 2:2^length(mediators)){
+    aaa <- as.numeric(strsplit(convert_to_binary(u-1),"")[[1]])
+    NN[u] <- paste("A",paste(mediators[which(aaa[length(aaa):1]==1)],collapse = "->"),"Y",sep="->")[1]
+  }
+  rownames(iPSEsv) <- NN
+  colnames(iPSEsv) <- "PSE"
+#######################################################
+  ########################################################################################
+  part_lambda_funtion <- function(){
+    R0 <- matrix(NA,length(mediators),1)
+    R0[length(mediators),1] <- delta_Y[1,length(mediators)]
+    for(j in (length(mediators)-1) : 1 ){
+      dd <- (j+1):length(mediators)
+      R0[j,1] <- delta_Y[1,j]+sum(R0[dd,1]*delta_C[dd,j])
+    }
+    return(R0*beta_M)
+  }
+  partPSEsv <- rbind( beta_Y[1,],part_lambda_funtion() )*(a1-a0)
+
+  NN0 <- c(); NN0[1] <- "A->Y"
+  for(u in 1:length(mediators)){
+    NN0[u+1] <- paste("A",paste(c(mediators[u],"..."),collapse = "->"),"Y",sep="->")[1]
+  }
+  rownames(partPSEsv) <- NN0
+  colnames(partPSEsv) <- "PSE"
+
+  #output
+  return(structure(list(iPSEsv=iPSEsv,partPSEsv=partPSEsv)))
+}
