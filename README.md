@@ -16,7 +16,7 @@ To install this package, please copy and paste following codes into your R sessi
 
 ## Example
 ```R
-library(BayICE)
+library(iPSEsv)
 data <- data.frame(time=c(4,3,1,1,2,2,3,3,5,10,2,5,1,7)
 status=c(1,1,1,0,1,1,0,1,1,1,0,1,1,0)
 x1=rnorm(14,0,1)
