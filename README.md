@@ -40,6 +40,6 @@ output <- iPSEsv(data=data,exposure=exposure,base.conf=base.conf,time.conf=time.
 ```
 
 ## Contact information
-An-Shun Tai ([daansh13@gmail.com](mailto:daansh13@gmail.com))  https://anshuntai.weebly.com
-Pei-Hsuan Lin ([a52012232@gmail.com](mailto:a52012232@gmail.com))
+An-Shun Tai ([daansh13@gmail.com](mailto:daansh13@gmail.com))  https://anshuntai.weebly.com <br />
+Pei-Hsuan Lin ([a52012232@gmail.com](mailto:a52012232@gmail.com)) <br />
 Sheng-Hsuan Lin ([shenglin@nctu.edu.tw](mailto:shenglin@nctu.edu.tw))
